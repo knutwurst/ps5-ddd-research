@@ -1,0 +1,33 @@
+# Build artifacts
+*.elf
+*.o
+*.obj
+*.so
+*.a
+
+# Dumped Sony binaries — do not redistribute
+dumps/
+*.sprx
+SceShellCore*
+SceSysCore*
+mini-syscore*
+*_header.bin
+
+# Local notes with console-identifying info
+LOCAL_NOTES.md
+nvs_backup.bin
+local/
+
+# Payload logs captured from a running console
+*.log
+output.txt
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Editor state
+.idea/
+.vscode/
+*.swp
+*.swo

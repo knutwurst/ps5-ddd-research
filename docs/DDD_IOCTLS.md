@@ -1,0 +1,89 @@
+# /dev/ddd ioctl matrix
+
+Group `0x44` ('D'). All codes observed as `IOC_INOUT`, size `0x28` (40 bytes).
+
+The argument struct for every DDD ioctl:
+
+```c
+struct ddd_ioctl {
+    uint8_t  pad[4];
+    int32_t  in_size;
+    uint8_t *in_buf;
+    int32_t  out_size;
+    uint8_t *out_buf;
+    uint32_t status;      // out — SBL error code
+    uint32_t pad2;
+};
+```
+
+The kernel driver forwards the request to SBL and copies the input in and the
+output out via the embedded pointers. The `status` field receives the SBL
+return code. `ioctl()` itself returns `0` on dispatch success — a non-zero
+`status` is the real error.
+
+## Observed behavior with empty input (`in_size = 0`)
+
+| Code         | ioctl ret | `status`        | Output                     | Likely meaning |
+|--------------|-----------|-----------------|----------------------------|----------------|
+| `0xC0284401` | 0         | `0x00000000`    | 16-byte nonce              | `GetNonce` — generates a random challenge |
+| `0xC0284402` | 0         | `0x800F140E`    | zeros                      | Precondition missing — needs crypto response |
+| `0xC0284403` | 0         | `0x800F140E`    | zeros                      | Precondition missing |
+| `0xC0284404` | 0         | `0x800F1428`    | zeros                      | Different precondition error |
+| `0xC0284405` | 0         | `0x800F140E`    | zeros                      | Precondition missing |
+| `0xC0284406` | 0         | `0x00000000`    | 4-byte state (observed: `04 00 00 00`) | `GetStatus` |
+| `0xC0284407` | 0         | `0x00000000`    | zeros                      | Returns successfully with no data |
+
+Codes `0x08` through `0x20` all return `status 0x800F140E` with no visible
+difference.
+
+## ShellCore usage
+
+Call sites in `SceShellCore.elf` sorted by code:
+
+| Code         | Call sites | Context |
+|--------------|-----------:|---------|
+| `0xC0284401` | 3          | Grouped near the pairing sequence at `0xa15xxx` |
+| `0xC0284402` | 1          | Pairing sequence |
+| `0xC0284403` | 3          | Pairing sequence + a different code area at `0x14aexxx` |
+| `0xC0284404` | 1          | Pairing sequence |
+| `0xC0284405` | 3          | Pairing sequence + `0x14aexxx` |
+| `0xC0284406` | 0          | **Not used by ShellCore at all** |
+| `0xC0284407` | 1          | Pairing sequence |
+
+`ShellCore` queries pairing status via `sceSblDddGetPairingStatus()` (a typed
+wrapper that goes through a different code path, not through code `0x06`).
+Code `0x06` therefore appears to be a factory/debug-only ioctl.
+
+## SBL status codes seen
+
+| `status`      | Meaning (inferred) |
+|---------------|--------------------|
+| `0x00000000`  | SCE_OK |
+| `0x800F140E`  | Protocol state mismatch / precondition missing |
+| `0x800F1428`  | Different state-related error |
+
+## Potentially useful observations
+
+- Code `0x01` succeeds without a drive present, so the nonce it returns is
+  kernel-generated, not drive-generated. It is not useful on its own as a
+  wake-up trigger.
+- Code `0x06` works regardless of other state and reflects the kernel-side
+  DDD state verbatim.
+- No input combination caused codes `0x02`-`0x05` to progress. The expected
+  input is a signed response that only the drive hardware (powered up and
+  authenticated) can produce.
+
+## Error-code decoding
+
+`0x800F140E` factors as:
+
+```
+status word: 0x800F140E
+   facility:   0x0F     (SBL)
+   subsystem:  0x14     (DDD)
+   code:       0x0E     (14 — "state transition not allowed from current state")
+   high bit:   error
+```
+
+`0x1428` keeps the facility and subsystem (`SBL/DDD`) and changes the code to
+`0x28 = 40`, which would be a more specific condition for that one ioctl.
