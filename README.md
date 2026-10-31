@@ -3,6 +3,11 @@
 Research notes and payload sources from an investigation into the PS5 Detachable
 Disc Drive (DDD) pairing subsystem on firmware 11.60.
 
+> **Scope**: interoperability research and personal device recovery only.
+> This repository does not enable piracy, does not circumvent any disc-media
+> copy protection, and does not redistribute any Sony binaries.
+> See [DISCLAIMER.md](DISCLAIMER.md) for the full statement.
+
 ## Context
 
 A PS5 Slim ended up with its disc drive in the `DELETE_INCOMPLETE` state after a
@@ -66,8 +71,21 @@ All payloads build against the
 [ps5-payload-sdk](https://github.com/ps5-payload-dev/sdk) and deploy over
 TCP via `prospero-deploy` to the PS5's ELF loader.
 
-## Disclaimer
+## Related work
 
-Nothing in this repo redistributes Sony binaries. The analysis is based on
-binaries dumped by the console owner. All findings are intended for recovery
-and research only.
+- [`earthonion/ddd_pair_dump`](https://github.com/earthonion/ddd_pair_dump) —
+  PS5 DDD 4-stage pairing pipeline dump tool
+- [`bc160201983/Troubleshoot-PS5-disc-drive-pairing`](https://github.com/bc160201983/Troubleshoot-PS5-disc-drive-pairing) —
+  DDD protocol analysis
+- [`ps5-payload-dev/sdk`](https://github.com/ps5-payload-dev/sdk) — the
+  payload toolchain used here
+
+## License and disclaimer
+
+- Code and documentation are released under the [MIT License](LICENSE).
+- The full statement of purpose, legal framing, and scope is in
+  [DISCLAIMER.md](DISCLAIMER.md). Read it before using anything here.
+
+Nothing in this repository redistributes Sony binaries. The analysis is based
+on binaries dumped from the owner's own console. All findings are intended for
+recovery and interoperability research only.
