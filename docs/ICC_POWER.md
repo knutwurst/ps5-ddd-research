@@ -44,7 +44,7 @@ operations):
 |--------------|-----------|------|-------------------|
 | `0xC0019901` | INOUT     | 1    | Returns the byte you pass in. Likely a device-select echo. |
 | `0xC0099902` | INOUT     | 9    | Reads a 9-byte status structure (see below). |
-| `0x40019907` | IN        | 1    | Accepts a 1-byte command. Returns `0`. Output buffer is overwritten with the current DDD state byte on exit (observed: `0x04` while DDD is `DELETE_INCOMPLETE`). |
+| `0x40019907` | OUT       | 1    | Reads a 1-byte status. Returns `0`. Under FreeBSD ioctl encoding, `0x40000000` is `IOC_OUT` (kernel → user), so the kernel writes into the caller's buffer rather than reading from it. The observed output byte was `0x04` while DDD was in `DELETE_INCOMPLETE`. |
 
 mini-syscore disassembly of the sequence at `vaddr 0x0046fc80`:
 
@@ -54,17 +54,26 @@ MOV  esi, 0x00010002
 CALL open
 TEST eax, eax
 JS   fail
-MOV  esi, 0xC0099902                 ; cmd = read 9 bytes
+MOV  esi, 0xC0099902                 ; cmd = read 9 bytes (INOUT)
 MOV  edi, eax                        ; fd
 MOV  rdx, state_buf
 CALL ioctl
 TEST eax, eax
 JNE  skip
-LEA  rdx, [cmd_byte]                 ; 1-byte input
-MOV  esi, 0x40019907
+LEA  rdx, [out_byte]                 ; 1-byte output buffer
+MOV  esi, 0x40019907                 ; IOC_OUT — reads 1 byte from driver
 MOV  edi, fd
 CALL ioctl
 ```
+
+**Note on ioctl direction:** earlier versions of this document labelled
+`0x40019907` as `IN` (user → kernel). Under FreeBSD's `ioccom.h` encoding
+(`0x40000000 = IOC_OUT`, `0x80000000 = IOC_IN`), the direction is actually
+`OUT` (kernel → user). The caller's buffer is an output destination, not an
+input command. The values mini-syscore places in the buffer before the call
+are overwritten by the driver and are not delivered as commands. Whether the
+PS5's driver dispatch strictly follows the FreeBSD convention has not been
+independently confirmed, but the standard encoding is the working assumption.
 
 The 9-byte state at offset 0: four bytes of per-component status, four bytes
 reserved, one trailing byte. On the console under investigation while the DDD
@@ -78,22 +87,33 @@ Byte `2 = 0x01` reads as "BD drive is physically attached". Byte `6 = 0x02`
 appears consistently but its meaning was not identified. Byte `0 = 0x00` is
 the BD-drive power indicator. Calling `Set(1)` did not flip it.
 
-Directly writing byte values `0x00` through `0x08` via ioctl `0x40019907` was
-tried: every write returned `0` with no change to the state read via
-`0xC0099902`. The device accepts and discards.
+Ioctl `0x40019907` was called with the output buffer pre-filled to each of
+`0x00` through `0x08`: every call returned `0` and the output buffer was
+overwritten with the same value. Given the `IOC_OUT` encoding, the pre-fill
+values were likely never delivered to the driver. The call appears to be a
+pure status read, not a command interface.
 
 ## Why direct power-on does not work in this scenario
 
-The ICC subsystem is a separate ARM microcontroller. Both the typed function
-`sceKernelIccControlBDPowerState` and the raw ioctl `0x40019907` end up as
-messages to that microcontroller. The microcontroller firmware is where the
-decision to actually drive power to the BD module is made.
+Two observations:
 
-Observationally, when the DDD pairing state is `DELETE_INCOMPLETE` (`0x04`),
-the ICC firmware acknowledges `Set(1)` but never routes power. The 1-byte
-output buffer after `0x40019907` is overwritten with `0x04`, strongly
-suggesting the ICC is reflecting back the DDD state as the reason for refusal.
+1. The typed function `sceKernelIccControlBDPowerState(1)` returns `0`
+   (SCE_OK) but a subsequent `Get` still shows the drive unpowered. The
+   request is accepted at the API level but has no observable effect.
+2. The raw ioctl `0x40019907` is `IOC_OUT` — a status read, not a command
+   write (see the direction note above). The `0x04` byte it returns matches
+   the DDD `DELETE_INCOMPLETE` state, but it is not evidence of an ICC
+   rejection message — it is the ICC reporting the current DDD state.
 
-Without the ability to patch the ICC firmware or convince it that the DDD state
-is `PAIRED` (which requires persistent NVS changes with signature risk), there
-is no user-space path to actually power the drive on.
+**Hypothesis (not proven):** the ICC subsystem (believed to be a separate ARM
+microcontroller, though the architecture has not been independently confirmed)
+internally checks the DDD pairing state before routing power and silently
+refuses when the state is not `PAIRED` or `FACTORY_PAIRED`. The typed setter
+returning success while having no effect is consistent with this, but other
+explanations are possible: a missing initialization sequence, a host-driver
+precondition, an asynchronous handshake, or a different subsystem making the
+decision.
+
+Without a way to change the persistent DDD state (which requires ICC NVS
+writes with signature/MAC risk) or to identify and address the actual
+enforcement point, there is no known user-space path to power the drive on.

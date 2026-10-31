@@ -78,22 +78,30 @@ Interpretation hypothesis:
 ```
 
 Byte `0x00` was `0x04` on the console under investigation, matching
-`DELETE_INCOMPLETE`. This is almost certainly the persistent store the kernel
-loads the DDD state from at boot.
+`DELETE_INCOMPLETE`. **Correlation only** — this is consistent with the
+persistent store the kernel loads the DDD state from at boot, but that has
+not been proven (the byte could be a copy, a log, or unrelated).
 
-Bytes `0x10`-`0x13` are redacted (`XX XX XX XX`) because they looked like
-console-unique key material or a key hash. Their presence confirms the
-pairing keys were not actually wiped by the incomplete delete.
+Bytes `0x10`-`0x13` are redacted (`XX XX XX XX`) because they contained
+non-zero, non-`0xFF` values that could be console-unique material. Whether
+they are pairing keys, a key hash, a MAC, or something else entirely is
+unknown. Their presence is consistent with the hypothesis that the incomplete
+delete did not wipe pairing keys, but does not confirm it — the actual key
+format, location, and validity conditions have not been established.
 
 The surrounding structure (byte `0x02 = 0x20`, byte `0x04-0x07 = 01 00 31 00`)
-is likely a header; without more samples it is impossible to say whether the
-state byte alone can be modified safely.
+may be a header, record metadata, or part of a larger structure. Without
+samples from other consoles or DDD states, the record format cannot be
+determined, and it is not possible to say whether modifying the state byte
+alone would produce a valid record.
 
 ## Why not write here
 
-Changing byte `0x1000` from `0x04` to `0x00` would make the kernel load state
-`PAIRED` at next boot. The ICC would then be told pairing is valid and should
-power the drive.
+**Hypothesis:** changing byte `0x1000` from `0x04` to `0x00` might cause the
+kernel to load state `PAIRED` at next boot, which might cause the ICC to
+power the drive. This assumes the byte is authoritative, is the only copy,
+and that no checksum or MAC protects the record — none of which has been
+established.
 
 Risks that stopped this from being attempted:
 

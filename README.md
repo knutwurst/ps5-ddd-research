@@ -22,8 +22,9 @@ state is `4` (`DELETE_INCOMPLETE`).
 ## Goal
 
 Figure out what the DDD pairing subsystem actually does, what state is held
-where, and whether an unprivileged user-space payload can convince the system to
-treat the drive as paired again without touching persistent storage.
+where, and whether a user-space payload (with kernel-level privilege
+escalation) can convince the system to treat the drive as paired again
+without touching persistent storage.
 
 ## Outcome
 

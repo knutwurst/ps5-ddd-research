@@ -74,13 +74,21 @@ static int find_shellcore(FILE *f, pid_t *out_pid, intptr_t *out_base) {
 }
 
 static int patch(FILE *f, pid_t pid, intptr_t addr, const char *label,
-                 const uint8_t *bytes, size_t len) {
+                 const uint8_t *expected, const uint8_t *bytes, size_t len) {
     uint8_t before[16], after[16];
-    kernel_proc_copyout(pid, addr, before, len);
+    if (kernel_proc_copyout(pid, addr, before, len) != 0) {
+        fprintf(f, "  %s @ 0x%lx: read failed\n", label, (unsigned long)addr);
+        return 0;
+    }
     if (memcmp(before, bytes, len) == 0) {
         fprintf(f, "  %s @ 0x%lx: already patched\n",
                 label, (unsigned long)addr);
         return 1;
+    }
+    if (expected && memcmp(before, expected, len) != 0) {
+        fprintf(f, "  %s @ 0x%lx: unexpected original bytes\n",
+                label, (unsigned long)addr);
+        return 0;
     }
     kernel_proc_copyin(pid, bytes, addr, len);
     kernel_proc_copyout(pid, addr, after, len);
@@ -112,10 +120,11 @@ int main(void) {
         return 1;
     }
 
-    patch(f, pid, base + PATCH_CHECK_VADDR,
-          "checkDddPairingStatus switch", CHECK_PATCH, 6);
-    patch(f, pid, base + PATCH_CACHE_VADDR,
-          "cache-write NOP", CACHE_PATCH, 6);
+    int ok = 1;
+    ok &= patch(f, pid, base + PATCH_CHECK_VADDR,
+                "checkDddPairingStatus switch", CHECK_SIG, CHECK_PATCH, 6);
+    ok &= patch(f, pid, base + PATCH_CACHE_VADDR,
+                "cache-write NOP", CACHE_SIG, CACHE_PATCH, 6);
 
     uint32_t zero = 0;
     kernel_proc_copyin(pid, &zero, base + G_PREV_PAIR_VADDR, 4);
@@ -125,13 +134,14 @@ int main(void) {
     uint8_t probe[5];
     kernel_proc_copyout(pid, base + PATCH_TURNOFF_VADDR, probe, 5);
     if (probe[0] == TURNOFF_SIG_BYTE || probe[0] == 0x90) {
-        patch(f, pid, base + PATCH_TURNOFF_VADDR,
-              "turnOffBdDrive CALL NOP", TURNOFF_PATCH, 5);
+        ok &= patch(f, pid, base + PATCH_TURNOFF_VADDR,
+                    "turnOffBdDrive CALL NOP", NULL, TURNOFF_PATCH, 5);
     } else {
         fprintf(f, "  turnOffBdDrive CALL: unexpected first byte 0x%02x\n",
                 probe[0]);
+        ok = 0;
     }
 
     fclose(f);
-    return 0;
+    return ok ? 0 : 1;
 }

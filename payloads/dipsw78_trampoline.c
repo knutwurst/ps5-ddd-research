@@ -8,11 +8,16 @@
  * Because libSceDipsw.sprx is mapped as shared memory, patching the function
  * in one process patches it for every other process that imports it.
  *
- * Trampoline:
+ * Trampoline (11 bytes):
  *   83 FF 4E        CMP edi, 78
- *   75 06           JNE +6
+ *   75 06           JNE +6          (falls through to original byte 11)
  *   B8 01 00 00 00  MOV eax, 1
  *   C3              RET
+ *
+ * The JNE fallthrough assumes byte 11 of the original function is a valid
+ * instruction boundary and that the overwritten prologue bytes are not
+ * needed by subsequent code. Verified empirically on FW 11.60 but fragile
+ * across firmware versions.
  */
 
 #include <stdio.h>
@@ -76,9 +81,9 @@ static int patch_in_process(FILE *f, pid_t pid) {
         return 0;
     }
 
-    uint8_t first;
-    kernel_proc_copyout(pid, addr, &first, 1);
-    if (first == TRAMPOLINE[0]) {
+    uint8_t probe[11];
+    kernel_proc_copyout(pid, addr, probe, sizeof(probe));
+    if (memcmp(probe, TRAMPOLINE, sizeof(TRAMPOLINE)) == 0) {
         fprintf(f, "  pid %d: already patched\n", pid);
         return 1;
     }

@@ -43,9 +43,10 @@ static int resolve_funcs(pid_t pid, icc_get_fn *get, icc_set_fn *set) {
         intptr_t base = kernel_dynlib_mapbase_addr(pid, h);
         if (base == 0 || base == -1) continue;
         intptr_t s = kernel_dynlib_resolve(pid, h, SET_NID);
-        if (s) {
+        intptr_t g = kernel_dynlib_resolve(pid, h, GET_NID);
+        if (s && g) {
             *set = (icc_set_fn)s;
-            *get = (icc_get_fn)kernel_dynlib_resolve(pid, h, GET_NID);
+            *get = (icc_get_fn)g;
             return 1;
         }
     }
@@ -85,9 +86,9 @@ int main(void) {
     fprintf(f, "Get after:  ret=%d state=0x%02x\n", gret, after);
 
     if (after != before) {
-        fprintf(f, "state changed\n");
+        fprintf(f, "state changed: 0x%02x -> 0x%02x\n", before, after);
     } else {
-        fprintf(f, "state unchanged — ICC accepted and discarded\n");
+        fprintf(f, "state unchanged after Set(1)\n");
     }
 
     fclose(f);

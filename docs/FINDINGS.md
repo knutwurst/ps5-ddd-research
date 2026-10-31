@@ -123,6 +123,13 @@ B8 01 00 00 00    MOV eax, 1
 C3                RET
 ```
 
+For index != 78, `JNE +6` falls through to byte 11 of the original function.
+This assumes byte 11 is a valid instruction boundary in the original prologue
+and that no register or stack setup from the overwritten bytes is needed. On
+the tested firmware the fallthrough path worked without crashes, but the
+original prologue bytes were not recorded — the assumption is fragile and
+firmware-specific.
+
 Return value `1` for index `78` enables the `SCE_KERNEL_DIPSW_ENABLE_DDD_EMU`
 code path in ShellCore. ShellCore's log strings confirm the intent:
 
@@ -158,8 +165,9 @@ ShellCore uses these in `_AutoMounter::DiscHandler::turnOnBdDrive()` at vaddr
 ```
 
 Calling `sceKernelIccControlBDPowerState(1)` directly from a payload returns `0`
-(SCE_OK). The ICC subsystem does not actually power the drive — a subsequent
-`Get` still shows byte `0x00`. See `docs/ICC_POWER.md` for the raw-ioctl path.
+(SCE_OK). A subsequent `Get` still shows byte `0x00` — the drive does not
+power on despite the accepted request. See `docs/ICC_POWER.md` for the
+raw-ioctl path and the corrected ioctl direction analysis.
 
 ## /dev/ddd ioctl matrix (observed behavior)
 
@@ -175,8 +183,11 @@ See `docs/DDD_IOCTLS.md` for full detail. Summary:
 | `0xC0284406` | OK; returns 4-byte pairing state.              |
 | `0xC0284407` | OK; returns all zeros.                         |
 
-ShellCore itself uses codes `01, 02, 03, 04, 05, 07` but never `06` — the
-`DELETE_INCOMPLETE`-returning status code is apparently a factory/debug ioctl.
+ShellCore itself uses codes `01, 02, 03, 04, 05, 07` but never `06`.
+ShellCore queries pairing status through `sceSblDddGetPairingStatus()` (a
+typed SBL wrapper), not through code `0x06`. The absence of ShellCore call
+sites does not prove code `0x06` is debug/factory-only — other processes or
+vtable-dispatched callers could use it.
 
 ## Device inventory (DDD-related)
 
@@ -199,20 +210,42 @@ Opens observed:
 
 ## Why nothing further is safe
 
-The ICC subsystem is a separate ARM microcontroller. It makes its own decision
-about whether to actually route power to the drive based on either its own
-cached state or a direct read from ICC NVS. Our user-space patches do not touch
-either, so the ICC continues to see `DELETE_INCOMPLETE` and silently refuses.
+**Observation:** the typed `sceKernelIccControlBDPowerState(1)` returns
+success but the drive does not power on. All four ShellCore patches together
+do not change this outcome.
 
-The only remaining options are:
+**Inference:** the enforcement that prevents power-on likely sits below the
+kernel's typed API — possibly in ICC firmware, possibly in a secure-world
+service, possibly in a host-driver precondition. The exact enforcement point
+has not been identified.
 
-1. Write a `0x00` byte to ICC NVS at the DDD state offset. The region likely
-   has a MAC or signature covering the state, so breaking that could cause the
-   DDD section to be reset to factory on next boot, which would invalidate the
-   stored keys.
+**Not established:**
+
+- That the ICC is an ARM microcontroller (plausible but unverified).
+- That the ICC firmware specifically checks a DDD state byte before routing
+  power (consistent with observations, but other explanations remain).
+- That the raw ioctl `0x40019907` is a command interface — under FreeBSD
+  encoding it is `IOC_OUT` (a status read). See `ICC_POWER.md`.
+- That no other initialization sequence, device node, or subsystem could
+  restore drive power without touching ICC NVS.
+
+**Remaining known options (all carry risk):**
+
+1. Write a `0x00` byte to ICC NVS at the DDD state offset. The region
+   plausibly carries a MAC or signature; breaking that could cause the DDD
+   section to be reset to factory on next boot, invalidating the stored keys.
 2. Patch the kernel-level DDD driver's ioctl handler. Earlier attempts to read
    kernel text/heap pages via `kernel_copyout` triggered page faults on
    unmapped pages, causing kernel panics.
 
-Neither option is appropriate for a device the owner needs working. The
-research stops here.
+**Uninvestigated paths:**
+
+- `/dev/driveauth` and `/dev/icc_bddrive` (reported by related research,
+  presence not checked on this firmware).
+- Certificate-bearing DDD status queries (the empty-input query may not
+  reflect the full pairing relationship).
+- The native power-on sequence that a working paired drive goes through on
+  boot or disc insertion.
+
+Neither risky option is appropriate for a device the owner needs working.
+The research stops here.
